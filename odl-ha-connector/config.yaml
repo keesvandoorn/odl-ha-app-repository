@@ -1,5 +1,5 @@
 name: "ODL ha-vm Connector"
-version: "0.1.1"
+version: "0.1.2"
 slug: "odl_ha_connector"
 description: "Log-only ODL Connector voor Home Assistant Core logs via Supervisor"
 url: "https://github.com/keesvandoorn/odl-ha-app-repository"
@@ -11,7 +11,7 @@ boot: manual
 init: false
 
 hassio_api: true
-hassio_role: default
+hassio_role: homeassistant
 homeassistant_api: false
 docker_api: false
 

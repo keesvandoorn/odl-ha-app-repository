@@ -8,7 +8,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 OPTIONS_FILE = Path("/data/options.json")
 
 BUFFER_DIR = Path("/data/buffer")

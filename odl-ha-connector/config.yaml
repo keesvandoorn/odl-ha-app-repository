@@ -1,0 +1,40 @@
+name: "ODL ha-vm Connector"
+version: "0.1.0"
+slug: "odl_ha_connector"
+description: "Log-only ODL Connector voor Home Assistant Core logs via Supervisor"
+url: "https://github.com/keesvandoorn/odl-ha-app-repository"
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: manual
+init: false
+
+hassio_api: true
+hassio_role: default
+homeassistant_api: false
+docker_api: false
+
+options:
+  gateway_url: "http://192.168.178.100:18080/odl/v1/ingest"
+  collector_id: "ha-vm"
+  collector_token: ""
+  source_mode: "supervisor_core_logs_follow"
+  supervisor_logs_endpoint: "http://supervisor/core/logs"
+  supervisor_logs_follow_endpoint: "http://supervisor/core/logs/follow"
+  heartbeat_interval_seconds: 60
+  batch_size: 50
+  max_buffer_records: 10000
+  log_level: "info"
+
+schema:
+  gateway_url: "url"
+  collector_id: "str"
+  collector_token: "password"
+  source_mode: "list(supervisor_core_logs_follow)"
+  supervisor_logs_endpoint: "str"
+  supervisor_logs_follow_endpoint: "str"
+  heartbeat_interval_seconds: "int(30,300)"
+  batch_size: "int(1,500)"
+  max_buffer_records: "int(100,100000)"
+  log_level: "list(debug|info|warning|error)"

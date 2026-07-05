@@ -19,12 +19,13 @@ try:
 except Exception:  # pragma: no cover
     ZoneInfo = None
 
-VERSION = "0.3.3"
+VERSION = "0.4.0"
 STATUS_FILE = Path("/data/status/odl-ha-connector-status.json")
 OPTIONS_FILE = Path("/data/options.json")
 
 DEFAULT_OPTIONS = {
     "gateway_url": "http://192.168.178.100:18080/odl/v1/ingest",
+    "gateway_enabled": False,
     "collector_id": "ha-vm",
     "collector_token": "",
     "source_mode": "supervisor_core_logs_follow",
@@ -116,6 +117,10 @@ counters: dict[str, int] = {
     "initial_snapshot_fetch_total": 0,
     "initial_snapshot_lines_total": 0,
     "initial_snapshot_error_total": 0,
+    "gateway_post_attempt_total": 0,
+    "gateway_post_success_total": 0,
+    "gateway_post_error_total": 0,
+    "gateway_records_sent_total": 0,
 }
 
 last: dict[str, Any] = {
@@ -139,6 +144,10 @@ last: dict[str, Any] = {
     "last_event_type": None,
     "last_message_length": None,
     "last_odl_record_summary": None,
+    "last_gateway_post_at": None,
+    "last_gateway_http_status": None,
+    "last_gateway_error_type": None,
+    "last_gateway_result": None,
 }
 
 stop_requested = False
@@ -154,6 +163,95 @@ def log(message: str) -> None:
 
 def safe_bool(value: Any) -> bool:
     return bool(value)
+
+def option_gateway_enabled(options: dict) -> bool:
+    value = options.get("gateway_enabled", False)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def build_lifecycle_record(options: dict, event_type: str, message: str, severity: str = "info") -> dict[str, Any]:
+    return {
+        "odl_version": "1.0",
+        "timestamp": utc_now(),
+        "collector_id": options.get("collector_id", "ha-vm"),
+        "host": "homeassistant",
+        "host_role": "ha-vm",
+        "connector": "home-assistant",
+        "source_type": "lifecycle",
+        "service": "odl-ha-connector",
+        "severity": normalize_severity(severity),
+        "event_type": event_type,
+        "message": message,
+        "metadata": {
+            "source_mode": options.get("source_mode", "supervisor_core_logs_follow"),
+            "gateway_enabled": option_gateway_enabled(options),
+            "raw_line_stored": False,
+        },
+    }
+
+
+def post_to_gateway(options: dict, record: dict[str, Any]) -> bool:
+    if not option_gateway_enabled(options):
+        return False
+
+    gateway_url = str(options.get("gateway_url", "")).strip()
+    collector_id = str(options.get("collector_id", "ha-vm")).strip() or "ha-vm"
+    collector_token = str(options.get("collector_token", "")).strip()
+
+    if not gateway_url:
+        counters["gateway_post_error_total"] += 1
+        last["last_gateway_result"] = "ERROR"
+        last["last_gateway_error_type"] = "missing_gateway_url"
+        return False
+
+    if not collector_token:
+        counters["gateway_post_error_total"] += 1
+        last["last_gateway_result"] = "ERROR"
+        last["last_gateway_error_type"] = "missing_collector_token"
+        return False
+
+    counters["gateway_post_attempt_total"] += 1
+    last["last_gateway_post_at"] = utc_now()
+
+    body = json.dumps(record, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "X-ODL-Collector": collector_id,
+        "X-ODL-Token": collector_token,
+    }
+
+    try:
+        req = urllib.request.Request(gateway_url, data=body, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as response:
+            status = int(response.getcode() or 0)
+
+        last["last_gateway_http_status"] = status
+        if 200 <= status <= 299:
+            counters["gateway_post_success_total"] += 1
+            counters["gateway_records_sent_total"] += 1
+            last["last_gateway_result"] = "OK"
+            last["last_gateway_error_type"] = None
+            return True
+
+        counters["gateway_post_error_total"] += 1
+        last["last_gateway_result"] = "ERROR"
+        last["last_gateway_error_type"] = f"http_{status}"
+        return False
+
+    except urllib.error.HTTPError as exc:
+        counters["gateway_post_error_total"] += 1
+        last["last_gateway_http_status"] = int(exc.code)
+        last["last_gateway_result"] = "ERROR"
+        last["last_gateway_error_type"] = f"http_{exc.code}"
+        return False
+
+    except Exception as exc:
+        counters["gateway_post_error_total"] += 1
+        last["last_gateway_result"] = "ERROR"
+        last["last_gateway_error_type"] = exc.__class__.__name__
+        return False
 
 
 def load_options() -> dict:
@@ -355,7 +453,7 @@ def parse_text_payload(text: str, transport: str) -> dict[str, Any] | None:
     return None
 
 
-def parse_line(line: str) -> None:
+def parse_line(line: str, options: dict | None = None) -> dict[str, Any] | None:
     counters["records_seen_total"] += 1
     last["last_record_at"] = utc_now()
 
@@ -364,7 +462,7 @@ def parse_line(line: str) -> None:
         counters["records_skipped_total"] += 1
         last["last_parse_status"] = "skipped"
         last["last_parser_pattern"] = transport
-        return
+        return None
 
     record: dict[str, Any] | None = None
 
@@ -405,6 +503,11 @@ def parse_line(line: str) -> None:
     last["last_message_length"] = len(record.get("message", ""))
     last["last_odl_record_summary"] = record_summary(record)
 
+    if options is not None:
+        post_to_gateway(options, record)
+
+    return record
+
 
 def write_status(options: dict, state: str = "running", result: str = "OK", extra: dict | None = None) -> None:
     STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -419,7 +522,7 @@ def write_status(options: dict, state: str = "running", result: str = "OK", extr
         "result": result,
         "collector_id": options.get("collector_id", "ha-vm"),
         "source_mode": options.get("source_mode", "supervisor_core_logs_follow"),
-        "gateway_enabled": False,
+        "gateway_enabled": option_gateway_enabled(options),
         "log_reader_enabled": True,
         "raw_log_content_printed": False,
         "raw_log_content_in_status": False,
@@ -449,6 +552,11 @@ def write_status(options: dict, state: str = "running", result: str = "OK", extr
         "initial_snapshot_lines_total": counters["initial_snapshot_lines_total"],
         "initial_snapshot_error_total": counters["initial_snapshot_error_total"],
         "supervisor_logs_snapshot_http_status": last["last_snapshot_http_status"],
+        "gateway_url_configured": bool(str(options.get("gateway_url", "")).strip()),
+        "gateway_post_attempt_total": counters["gateway_post_attempt_total"],
+        "gateway_post_success_total": counters["gateway_post_success_total"],
+        "gateway_post_error_total": counters["gateway_post_error_total"],
+        "gateway_records_sent_total": counters["gateway_records_sent_total"],
         "last": last,
     }
 
@@ -466,6 +574,10 @@ def write_status(options: dict, state: str = "running", result: str = "OK", extr
 def heartbeat(options: dict) -> None:
     counters["heartbeat_total"] += 1
     last["last_heartbeat_at"] = utc_now()
+    post_to_gateway(
+        options,
+        build_lifecycle_record(options, "collector_heartbeat", "ha-vm connector heartbeat"),
+    )
     write_status(options, state="running", result="OK")
     log(
         "heartbeat "
@@ -482,7 +594,7 @@ def log_startup(options: dict) -> None:
     log(f"version={VERSION}")
     log(f"collector_id={options.get('collector_id', 'ha-vm')}")
     log("source_mode=supervisor_core_logs_follow")
-    log("gateway_enabled=False")
+    log(f"gateway_enabled={option_gateway_enabled(options)}")
     log("log_reader_enabled=True")
     log("raw_log_content_printed=False")
     log("raw_log_content_in_status=False")
@@ -546,7 +658,7 @@ def fetch_initial_snapshot(options: dict) -> None:
         line_count = 0
         for payload in iter_snapshot_payloads(body):
             line_count += 1
-            parse_line(payload)
+            parse_line(payload, options)
 
         counters["initial_snapshot_lines_total"] += line_count
         last["last_snapshot_line_count"] = line_count
@@ -616,7 +728,7 @@ def follow_logs(options: dict) -> None:
                     except Exception:
                         line = ""
 
-                    parse_line(line)
+                    parse_line(line, options)
 
                     now = time.time()
                     if now >= next_heartbeat:
@@ -658,6 +770,10 @@ def main() -> int:
     try:
         log_startup(options)
         write_status(options, state="starting", result="OK")
+        post_to_gateway(
+            options,
+            build_lifecycle_record(options, "collector_started", "ha-vm connector started"),
+        )
 
         fetch_initial_snapshot(options)
 
@@ -672,10 +788,18 @@ def main() -> int:
                 next_heartbeat = now + heartbeat_interval
             time.sleep(1)
 
+        post_to_gateway(
+            options,
+            build_lifecycle_record(options, "collector_stopping", "ha-vm connector stopping"),
+        )
         write_status(options, state="stopping", result="OK")
         log("connector_stopping=True")
 
     finally:
+        post_to_gateway(
+            options,
+            build_lifecycle_record(options, "collector_stopped", "ha-vm connector stopped"),
+        )
         write_status(options, state="stopped", result="OK", extra={"graceful_stop": True})
         log("connector_stopped=True graceful_stop=True")
 

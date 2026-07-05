@@ -1,5 +1,5 @@
 name: "ODL ha-vm Connector"
-version: "0.3.3"
+version: "0.4.0"
 slug: "odl_ha_connector"
 description: "Log-only ODL Connector voor Home Assistant Core logs via Supervisor"
 url: "https://github.com/keesvandoorn/odl-ha-app-repository"
@@ -16,6 +16,7 @@ docker_api: false
 protected: true
 options:
   gateway_url: "http://192.168.178.100:18080/odl/v1/ingest"
+  gateway_enabled: false
   collector_id: "ha-vm"
   collector_token: ""
   source_mode: "supervisor_core_logs_follow"
@@ -27,6 +28,7 @@ options:
   log_level: "info"
 schema:
   gateway_url: "url"
+  gateway_enabled: "bool"
   collector_id: "str"
   collector_token: "password"
   source_mode: "list(supervisor_core_logs_follow)"

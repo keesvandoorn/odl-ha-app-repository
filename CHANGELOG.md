@@ -1,3 +1,12 @@
+## v0.4.0 - 2026-07-05
+
+- Gateway POST-client toegevoegd.
+- `gateway_enabled` optie toegevoegd, standaard uit.
+- `collector_token` wordt alleen gebruikt voor Gateway POST en nooit gelogd.
+- Gateway POST-counters toegevoegd aan statusbestand.
+- Lifecycle heartbeat/start/stop records voorbereid voor Gateway-route.
+- Geen buffering/retry/deadletter in deze versie.
+
 # Changelog
 
 ## 0.1.2

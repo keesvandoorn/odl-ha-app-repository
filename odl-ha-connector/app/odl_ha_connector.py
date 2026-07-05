@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 STATUS_FILE = Path("/data/status/odl-ha-connector-status.json")
 OPTIONS_FILE = Path("/data/options.json")
 
@@ -189,7 +189,7 @@ def follow_logs(options: dict) -> None:
         last["last_error_at"] = utc_now()
         last["last_error_type"] = "missing_supervisor_token"
         write_status(options, state="error", result="ERROR")
-        log("version=0.2.0 supervisor_token_present=False log_reader_enabled=False raw_log_content_printed=False")
+        log("version=0.2.1 supervisor_token_present=False log_reader_enabled=False raw_log_content_printed=False")
         return
 
     headers = {
@@ -202,7 +202,7 @@ def follow_logs(options: dict) -> None:
     next_summary = time.time() + 30
     next_status = time.time() + 5
 
-    log("version=0.2.0")
+    log("version=0.2.1")
     log(f"collector_id={options.get('collector_id', 'ha-vm')}")
     log("source_mode=supervisor_core_logs_follow")
     log("gateway_enabled=False")

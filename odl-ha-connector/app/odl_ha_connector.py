@@ -7,6 +7,7 @@ import re
 import signal
 import sys
 import time
+import threading
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -18,7 +19,7 @@ try:
 except Exception:  # pragma: no cover
     ZoneInfo = None
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 STATUS_FILE = Path("/data/status/odl-ha-connector-status.json")
 OPTIONS_FILE = Path("/data/options.json")
 
@@ -112,6 +113,9 @@ counters: dict[str, int] = {
     "follow_error_total": 0,
     "heartbeat_total": 0,
     "status_write_total": 0,
+    "initial_snapshot_fetch_total": 0,
+    "initial_snapshot_lines_total": 0,
+    "initial_snapshot_error_total": 0,
 }
 
 last: dict[str, Any] = {
@@ -123,6 +127,9 @@ last: dict[str, Any] = {
     "last_follow_connect_at": None,
     "last_follow_disconnect_at": None,
     "last_http_status": None,
+    "last_snapshot_http_status": None,
+    "last_snapshot_at": None,
+    "last_snapshot_line_count": None,
     "last_error_type": None,
     "last_error_message": None,
     "last_parse_status": None,
@@ -449,6 +456,10 @@ def write_status(options: dict, state: str = "running", result: str = "OK", extr
         "follow_error_total": counters["follow_error_total"],
         "heartbeat_total": counters["heartbeat_total"],
         "status_write_total": counters["status_write_total"],
+        "initial_snapshot_fetch_total": counters["initial_snapshot_fetch_total"],
+        "initial_snapshot_lines_total": counters["initial_snapshot_lines_total"],
+        "initial_snapshot_error_total": counters["initial_snapshot_error_total"],
+        "supervisor_logs_snapshot_http_status": last["last_snapshot_http_status"],
         "last": last,
     }
 
@@ -477,6 +488,101 @@ def heartbeat(options: dict) -> None:
     )
 
 
+
+def log_startup(options: dict) -> None:
+    log(f"version={VERSION}")
+    log(f"collector_id={options.get('collector_id', 'ha-vm')}")
+    log("source_mode=supervisor_core_logs_follow")
+    log("gateway_enabled=False")
+    log("log_reader_enabled=True")
+    log("raw_log_content_printed=False")
+    log("raw_log_content_in_status=False")
+    log(f"supervisor_token_present={bool(os.environ.get('SUPERVISOR_TOKEN'))}")
+    log(f"odl_collector_token_configured={bool(str(options.get('collector_token', '')).strip())}")
+    log(f"status_file={STATUS_FILE}")
+
+
+def iter_snapshot_payloads(body: str):
+    stripped = body.strip()
+    if not stripped:
+        return
+
+    if stripped.startswith("[") or stripped.startswith("{"):
+        try:
+            parsed = json.loads(stripped)
+        except Exception:
+            parsed = None
+
+        if isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, dict):
+                    yield json.dumps(item, ensure_ascii=False)
+                else:
+                    yield str(item)
+            return
+
+        if isinstance(parsed, dict):
+            yield json.dumps(parsed, ensure_ascii=False)
+            return
+
+    for line in body.splitlines():
+        if line.strip():
+            yield line
+
+
+def fetch_initial_snapshot(options: dict) -> None:
+    endpoint = options.get("supervisor_logs_endpoint", "http://supervisor/core/logs")
+    token = os.environ.get("SUPERVISOR_TOKEN")
+
+    counters["initial_snapshot_fetch_total"] += 1
+    last["last_snapshot_at"] = utc_now()
+
+    if not token:
+        counters["initial_snapshot_error_total"] += 1
+        last["last_error_type"] = "missing_supervisor_token_snapshot"
+        write_status(options, state="error", result="ERROR")
+        log("initial_snapshot_reachable=False reason=missing_supervisor_token")
+        return
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "text/plain, application/json",
+        "User-Agent": "odl-ha-vm-connector/0.3.1",
+    }
+
+    try:
+        req = urllib.request.Request(endpoint, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=20) as response:
+            last["last_snapshot_http_status"] = int(response.getcode() or 0)
+            body = response.read().decode("utf-8", errors="replace")
+
+        line_count = 0
+        for payload in iter_snapshot_payloads(body):
+            line_count += 1
+            parse_line(payload)
+
+        counters["initial_snapshot_lines_total"] += line_count
+        last["last_snapshot_line_count"] = line_count
+
+        write_status(options, state="running", result="OK")
+        log(
+            "initial_snapshot_reachable=True "
+            f"initial_snapshot_http_status={last['last_snapshot_http_status']} "
+            f"initial_snapshot_lines_total={line_count} "
+            f"records_seen_total={counters['records_seen_total']} "
+            f"records_parsed_total={counters['records_parsed_total']} "
+            f"records_unparsed_total={counters['records_unparsed_total']} "
+            f"records_normalized_total={counters['records_normalized_total']} "
+            f"last_parser_pattern={last['last_parser_pattern']}"
+        )
+
+    except Exception as exc:
+        counters["initial_snapshot_error_total"] += 1
+        last["last_error_type"] = exc.__class__.__name__
+        last["last_error_message"] = exc.__class__.__name__
+        write_status(options, state="warning", result="WARNING")
+        log(f"initial_snapshot_reachable=False initial_snapshot_error_type={exc.__class__.__name__}")
+
 def handle_signal(signum: int, _frame: Any) -> None:
     global stop_requested
     stop_requested = True
@@ -491,16 +597,16 @@ def follow_logs(options: dict) -> None:
     if not token:
         last["last_error_type"] = "missing_supervisor_token"
         write_status(options, state="error", result="ERROR")
-        log("version=0.3.0 supervisor_token_present=False")
+        log("version=0.3.1 supervisor_token_present=False")
         return
 
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "text/plain, text/event-stream, application/json",
-        "User-Agent": "odl-ha-vm-connector/0.3.0",
+        "User-Agent": "odl-ha-vm-connector/0.3.1",
     }
 
-    log("version=0.3.0")
+    log("version=0.3.1")
     log(f"collector_id={options.get('collector_id', 'ha-vm')}")
     log("source_mode=supervisor_core_logs_follow")
     log("gateway_enabled=False")
@@ -572,9 +678,28 @@ def main() -> int:
     signal.signal(signal.SIGINT, handle_signal)
 
     options = load_options()
+    heartbeat_interval = int(options.get("heartbeat_interval_seconds", 60))
 
     try:
-        follow_logs(options)
+        log_startup(options)
+        write_status(options, state="starting", result="OK")
+
+        fetch_initial_snapshot(options)
+
+        reader = threading.Thread(target=follow_logs, args=(options,), daemon=True)
+        reader.start()
+
+        next_heartbeat = time.time() + 5
+        while not stop_requested:
+            now = time.time()
+            if now >= next_heartbeat:
+                heartbeat(options)
+                next_heartbeat = now + heartbeat_interval
+            time.sleep(1)
+
+        write_status(options, state="stopping", result="OK")
+        log("connector_stopping=True")
+
     finally:
         write_status(options, state="stopped", result="OK", extra={"graceful_stop": True})
         log("connector_stopped=True graceful_stop=True")

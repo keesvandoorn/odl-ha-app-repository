@@ -1,5 +1,5 @@
 name: "ODL ha-vm Connector"
-version: "0.3.0"
+version: "0.3.1"
 slug: "odl_ha_connector"
 description: "Log-only ODL Connector voor Home Assistant Core logs via Supervisor"
 url: "https://github.com/keesvandoorn/odl-ha-app-repository"

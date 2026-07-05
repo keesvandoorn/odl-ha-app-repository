@@ -19,7 +19,7 @@ try:
 except Exception:  # pragma: no cover
     ZoneInfo = None
 
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 STATUS_FILE = Path("/data/status/odl-ha-connector-status.json")
 OPTIONS_FILE = Path("/data/options.json")
 
@@ -383,27 +383,16 @@ def parse_line(line: str) -> None:
         record = parse_text_payload(payload, transport)
 
     if record is None:
-        counters["records_unparsed_total"] += 1
-        last["last_unparsed_at"] = utc_now()
-        last["last_parse_status"] = "unparsed"
-        last["last_parser_pattern"] = "unmatched"
-        last["last_service"] = "homeassistant"
-        last["last_severity"] = "notice"
-        last["last_event_type"] = "log_event_unparsed"
-        last["last_message_length"] = len(payload)
-        last["last_odl_record_summary"] = record_summary(
-            build_record(
-                timestamp=utc_now(),
-                service="homeassistant",
-                severity="notice",
-                event_type="log_event_unparsed",
-                message="Unparsed Home Assistant log line",
-                parse_status="unparsed",
-                parser_pattern="unmatched",
-                transport=transport,
-            )
+        record = build_record(
+            timestamp=utc_now(),
+            service="homeassistant",
+            severity="notice",
+            event_type="log_event",
+            message=payload,
+            parse_status="parsed",
+            parser_pattern="generic_text_fallback",
+            transport=transport,
         )
-        return
 
     counters["records_parsed_total"] += 1
     counters["records_normalized_total"] += 1
@@ -595,7 +584,7 @@ def follow_logs(options: dict) -> None:
     if not token:
         last["last_error_type"] = "missing_supervisor_token"
         write_status(options, state="error", result="ERROR")
-        log("version=0.3.2 supervisor_token_present=False")
+        log("version=0.3.3 supervisor_token_present=False")
         return
 
     headers = {

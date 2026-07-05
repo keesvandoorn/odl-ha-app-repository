@@ -1,18 +1,13 @@
-FROM ghcr.io/home-assistant/base:latest
+ARG BUILD_FROM
+FROM $BUILD_FROM
 
-ARG BUILD_VERSION
-ARG BUILD_ARCH
+SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 
-LABEL \
-  io.hass.version="${BUILD_VERSION}" \
-  io.hass.type="app" \
-  io.hass.arch="${BUILD_ARCH}"
+RUN apk add --no-cache bash python3 ca-certificates
 
-RUN apk add --no-cache python3
+COPY run.sh /run.sh
+COPY app /app
 
-COPY run.sh /
-COPY app/ /app/
+RUN chmod 0755 /run.sh
 
-RUN chmod a+x /run.sh
-
-CMD [ "/run.sh" ]
+CMD ["/run.sh"]

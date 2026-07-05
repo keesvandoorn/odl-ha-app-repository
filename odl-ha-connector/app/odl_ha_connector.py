@@ -19,7 +19,7 @@ try:
 except Exception:  # pragma: no cover
     ZoneInfo = None
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 STATUS_FILE = Path("/data/status/odl-ha-connector-status.json")
 OPTIONS_FILE = Path("/data/options.json")
 
@@ -546,12 +546,10 @@ def fetch_initial_snapshot(options: dict) -> None:
 
     headers = {
         "Authorization": f"Bearer {token}",
-        "Accept": "text/plain, application/json",
-        "User-Agent": "odl-ha-vm-connector/0.3.1",
     }
 
     try:
-        req = urllib.request.Request(endpoint, headers=headers, method="GET")
+        req = urllib.request.Request(endpoint, headers=headers)
         with urllib.request.urlopen(req, timeout=20) as response:
             last["last_snapshot_http_status"] = int(response.getcode() or 0)
             body = response.read().decode("utf-8", errors="replace")
@@ -597,33 +595,21 @@ def follow_logs(options: dict) -> None:
     if not token:
         last["last_error_type"] = "missing_supervisor_token"
         write_status(options, state="error", result="ERROR")
-        log("version=0.3.1 supervisor_token_present=False")
+        log("version=0.3.2 supervisor_token_present=False")
         return
 
     headers = {
         "Authorization": f"Bearer {token}",
-        "Accept": "text/plain, text/event-stream, application/json",
-        "User-Agent": "odl-ha-vm-connector/0.3.1",
     }
 
-    log("version=0.3.1")
-    log(f"collector_id={options.get('collector_id', 'ha-vm')}")
-    log("source_mode=supervisor_core_logs_follow")
-    log("gateway_enabled=False")
-    log("log_reader_enabled=True")
-    log("raw_log_content_printed=False")
-    log("raw_log_content_in_status=False")
-    log("supervisor_token_present=True")
-    log(f"odl_collector_token_configured={bool(str(options.get('collector_token', '')).strip())}")
-    log(f"status_file={STATUS_FILE}")
-
-    write_status(options, state="starting", result="OK")
+    log("follow_reader_started=True")
+    write_status(options, state="running", result="OK")
 
     next_heartbeat = time.time() + 5
 
     while not stop_requested:
         try:
-            req = urllib.request.Request(endpoint, headers=headers, method="GET")
+            req = urllib.request.Request(endpoint, headers=headers)
             counters["follow_connect_total"] += 1
             last["last_follow_connect_at"] = utc_now()
 
